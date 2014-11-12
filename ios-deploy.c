@@ -917,7 +917,7 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
         bring_process_to_foreground();
 
         char lldb_shell[400];
-        sprintf(lldb_shell, "%s/usr/bin/%s", xcode_path, LLDB_SHELL);
+        sprintf(lldb_shell, LLDB_SHELL);
         if(device_id != NULL)
             strcat(lldb_shell, device_id);
 
