@@ -151,6 +151,7 @@ char *upload_pathname = NULL;
 char *bundle_id = NULL;
 bool interactive = true;
 bool justlaunch = false;
+char *xcode_path = NULL;
 char *app_path = NULL;
 char *device_id = NULL;
 char *args = NULL;
@@ -221,22 +222,11 @@ CFStringRef copy_long_shot_disk_image_path() {
 CFStringRef copy_xcode_dev_path() {
     static char xcode_dev_path[256] = { '\0' };
     if (strlen(xcode_dev_path) == 0) {
-        FILE *fpipe = NULL;
-        char *command = "xcode-select -print-path";
-
-        if (!(fpipe = (FILE *)popen(command, "r")))
-        {
-            perror("Error encountered while opening pipe");
-            exit(exitcode_error);
+        if (xcode_path == NULL) {
+            strcpy(xcode_dev_path, "/Applications/Xcode.app/Contents/Developer/");
+        } else {
+            strcpy(xcode_dev_path, xcode_path);
         }
-
-        char buffer[256] = { '\0' };
-
-        fgets(buffer, sizeof(buffer), fpipe);
-        pclose(fpipe);
-
-        strtok(buffer, "\n");
-        strcpy(xcode_dev_path, buffer);
     }
     return CFStringCreateWithCString(NULL, xcode_dev_path, kCFStringEncodingUTF8);
 }
@@ -270,11 +260,6 @@ CFStringRef copy_xcode_path_for(CFStringRef subPath, CFStringRef search) {
     // If not look in the default xcode location (xcode-select is sometimes wrong)
     if (!found) {
         path = CFStringCreateWithFormat(NULL, NULL, CFSTR("/Applications/Xcode.app/Contents/Developer/%@&%@"), subPath, search);
-        found = path_exists(path);
-    }
-    // If not look in the users home directory, Xcode can store device support stuff there
-    if (!found) {
-        path = CFStringCreateWithFormat(NULL, NULL, CFSTR("%s/Library/Developer/Xcode/%@/%@"), home, subPath, search);
         found = path_exists(path);
     }
 
@@ -435,9 +420,6 @@ CFStringRef copy_device_support_path(AMDeviceRef device) {
         }
         if (path == NULL) {
             path = copy_xcode_path_for(CFSTR("Platforms/iPhoneOS.platform/DeviceSupport"), version);
-        }
-        if (path == NULL) {
-            path = copy_xcode_path_for(CFSTR("Platforms/iPhoneOS.platform/DeviceSupport/Latest"), CFSTR(""));
         }
         CFRelease(version);
         if (path != NULL) {
@@ -932,20 +914,10 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
         signal(SIGHUP, SIG_DFL);
         signal(SIGLLDB, SIG_DFL);
         child = getpid();
-
-        int pfd[2] = {-1, -1};
-        if (isatty(STDIN_FILENO))
-            // If we are running on a terminal, then we need to bring process to foreground for input
-            // to work correctly on lldb's end.
-            bring_process_to_foreground();
-        else
-            // If lldb is running in a non terminal environment, then it freaks out spamming "^D" and
-            // "quit". It seems this is caused by read() on stdin returning EOF in lldb. To hack around
-            // this we setup a dummy pipe on stdin, so read() would block expecting "user's" input.
-            setup_dummy_pipe_on_stdin(pfd);
+        bring_process_to_foreground();
 
         char lldb_shell[400];
-        sprintf(lldb_shell, LLDB_SHELL);
+        sprintf(lldb_shell, "%s/usr/bin/%s", xcode_path, LLDB_SHELL);
         if(device_id != NULL)
             strcat(lldb_shell, device_id);
 
@@ -953,8 +925,6 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
         if (status == -1)
             perror("failed launching lldb");
 
-        close(pfd[0]);
-            close(pfd[1]);
         // Notify parent we're exiting
         kill(parent, SIGLLDB);
         // Pass lldb exit code
@@ -1454,6 +1424,7 @@ void timeout_callback(CFRunLoopTimerRef timer, void *info) {
 void usage(const char* app) {
     printf(
         "Usage: %s [OPTION]...\n"
+        "  -e, --xcodepath              Xcode path (default:/Applications/Xcode.app/Contents/Developer/)\n"
         "  -d, --debug                  launch the app in GDB after installation\n"
         "  -i, --id <device_id>         the id of the device to connect to\n"
         "  -c, --detect                 only detect if the device is connected\n"
@@ -1485,6 +1456,7 @@ void show_version() {
 
 int main(int argc, char *argv[]) {
     static struct option longopts[] = {
+        { "xcodepath", required_argument, NULL, 'e' },
         { "debug", no_argument, NULL, 'd' },
         { "id", required_argument, NULL, 'i' },
         { "bundle", required_argument, NULL, 'b' },
@@ -1510,12 +1482,15 @@ int main(int argc, char *argv[]) {
     };
     char ch;
 
-    while ((ch = getopt_long(argc, argv, "VmcdvunrILib:a:t:g:x:p:1:2:o:l::w::", longopts, NULL)) != -1)
+    while ((ch = getopt_long(argc, argv, "VmcdvunrILib:a:e:t:g:x:p:1:2:o:l::w::", longopts, NULL)) != -1)
     {
         switch (ch) {
         case 'm':
             install = 0;
             debug = 1;
+            break;
+        case 'e':
+            xcode_path = optarg;
             break;
         case 'd':
             debug = 1;
