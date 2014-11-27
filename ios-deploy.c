@@ -16,10 +16,9 @@
 #include <netinet/tcp.h>
 #include "MobileDevice.h"
 
-#define APP_VERSION    "1.2.0"
+#define APP_VERSION    "1.3.2"
 #define PREP_CMDS_PATH "/tmp/fruitstrap-lldb-prep-cmds-"
 #define LLDB_SHELL "lldb -s " PREP_CMDS_PATH
-
 /*
  * Startup script passed to lldb.
  * To see how xcode interacts with lldb, put this into .lldbinit:
@@ -47,7 +46,6 @@ const char* lldb_prep_interactive_cmds = "\
 
 const char* lldb_prep_noninteractive_justlaunch_cmds = "\
     run\n\
-    detach\n\
     safequit\n\
 ";
 
@@ -103,7 +101,17 @@ def run_command(debugger, command, result, internal_dict):\n\
        print(str(error))\n\
 \n\
 def safequit_command(debugger, command, result, internal_dict):\n\
-    sys.exit(0);\n\
+    process = lldb.target.process\n\
+    listener = debugger.GetListener()\n\
+    listener.StartListeningForEvents(process.GetBroadcaster(), lldb.SBProcess.eBroadcastBitStateChanged | lldb.SBProcess.eBroadcastBitSTDOUT | lldb.SBProcess.eBroadcastBitSTDERR)\n\
+    event = lldb.SBEvent()\n\
+    while True:\n\
+        if listener.WaitForEvent(1, event):\n\
+            state = process.GetStateFromEvent(event)\n\
+        else:\n\
+            state = lldb.eStateInvalid\n\
+        process.Detach()\n\
+        sys.exit(0)\n\
 \n\
 def autoexit_command(debugger, command, result, internal_dict):\n\
     process = lldb.target.process\n\
@@ -188,10 +196,20 @@ Boolean path_exists(CFTypeRef path) {
 CFStringRef find_path(CFStringRef rootPath, CFStringRef namePattern, CFStringRef expression) {
     FILE *fpipe = NULL;
     CFStringRef quotedRootPath = rootPath;
+    CFStringRef cf_command;
+    CFRange slashLocation;
+
     if (CFStringGetCharacterAtIndex(rootPath, 0) != '`') {
         quotedRootPath = CFStringCreateWithFormat(NULL, NULL, CFSTR("'%@'"), rootPath);
     }
-    CFStringRef cf_command = CFStringCreateWithFormat(NULL, NULL, CFSTR("find %@ -name '%@' %@ 2>/dev/null | sort | tail -n 1"), quotedRootPath, namePattern, expression);
+
+    slashLocation = CFStringFind(namePattern, CFSTR("/"), 0);
+    if (slashLocation.location == kCFNotFound) {
+        cf_command = CFStringCreateWithFormat(NULL, NULL, CFSTR("find %@ -name '%@' %@ 2>/dev/null | sort | tail -n 1"), quotedRootPath, namePattern, expression);
+    } else {
+        cf_command = CFStringCreateWithFormat(NULL, NULL, CFSTR("find %@ -path '%@' %@ 2>/dev/null | sort | tail -n 1"), quotedRootPath, namePattern, expression);
+    }
+
     if (quotedRootPath != rootPath) {
         CFRelease(quotedRootPath);
     }
@@ -245,6 +263,7 @@ CFStringRef copy_xcode_path_for(CFStringRef subPath, CFStringRef search) {
     CFStringRef path;
     bool found = false;
     const char* home = get_home();
+    CFRange slashLocation;
 
 
     // Try using xcode-select --print-path
@@ -254,7 +273,12 @@ CFStringRef copy_xcode_path_for(CFStringRef subPath, CFStringRef search) {
     }
     // Try find `xcode-select --print-path` with search as a name pattern
     if (!found) {
+        slashLocation = CFStringFind(search, CFSTR("/"), 0);
+        if (slashLocation.location == kCFNotFound) {
         path = find_path(CFStringCreateWithFormat(NULL, NULL, CFSTR("%@/%@"), xcodeDevPath, subPath), search, CFSTR("-maxdepth 1"));
+        } else {
+             path = find_path(CFStringCreateWithFormat(NULL, NULL, CFSTR("%@/%@"), xcodeDevPath, subPath), search, CFSTR(""));
+        }
         found = CFStringGetLength(path) > 0 && path_exists(path);
     }
     // If not look in the default xcode location (xcode-select is sometimes wrong)
@@ -276,80 +300,101 @@ CFStringRef copy_xcode_path_for(CFStringRef subPath, CFStringRef search) {
 // Please ensure that device is connected or the name will be unknown
 const CFStringRef get_device_hardware_name(const AMDeviceRef device) {
     CFStringRef model = AMDeviceCopyValue(device, 0, CFSTR("HardwareModel"));
-    const char *hwmodel = CFStringGetCStringPtr(model, CFStringGetSystemEncoding());
-
-    if (hwmodel && !strcmp("M68AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("M68AP"), kCFCompareNonliteral))
         return CFSTR("iPhone");
-    if (hwmodel && !strcmp("N45AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N45AP"), kCFCompareNonliteral))
         return CFSTR("iPod touch");
-    if (hwmodel && !strcmp("N82AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N82AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 3G");
-    if (hwmodel && !strcmp("N72AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N72AP"), kCFCompareNonliteral))
         return CFSTR("iPod touch 2G");
-    if (hwmodel && !strcmp("N88AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N88AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 3GS");
-    if (hwmodel && !strcmp("N18AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N18AP"), kCFCompareNonliteral))
         return CFSTR("iPod touch 3G");
-    if (hwmodel && !strcmp("K48AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("K48AP"), kCFCompareNonliteral))
         return CFSTR("iPad");
-    if (hwmodel && !strcmp("N90AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N90AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 4 (GSM)");
-    if (hwmodel && !strcmp("N81AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N81AP"), kCFCompareNonliteral))
         return CFSTR("iPod touch 4G");
-    if (hwmodel && !strcmp("K66AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("K66AP"), kCFCompareNonliteral))
         return CFSTR("Apple TV 2G");
-    if (hwmodel && !strcmp("N92AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N92AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 4 (CDMA)");
-    if (hwmodel && !strcmp("N90BAP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N90BAP"), kCFCompareNonliteral))
         return CFSTR("iPhone 4 (GSM, revision A)");
-    if (hwmodel && !strcmp("K93AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("K93AP"), kCFCompareNonliteral))
         return CFSTR("iPad 2");
-    if (hwmodel && !strcmp("K94AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("K94AP"), kCFCompareNonliteral))
         return CFSTR("iPad 2 (GSM)");
-    if (hwmodel && !strcmp("K95AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("K95AP"), kCFCompareNonliteral))
         return CFSTR("iPad 2 (CDMA)");
-    if (hwmodel && !strcmp("K93AAP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("K93AAP"), kCFCompareNonliteral))
         return CFSTR("iPad 2 (Wi-Fi, revision A)");
-    if (hwmodel && !strcmp("P105AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("P105AP"), kCFCompareNonliteral))
         return CFSTR("iPad mini");
-    if (hwmodel && !strcmp("P106AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("P106AP"), kCFCompareNonliteral))
         return CFSTR("iPad mini (GSM)");
-    if (hwmodel && !strcmp("P107AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("P107AP"), kCFCompareNonliteral))
         return CFSTR("iPad mini (CDMA)");
-    if (hwmodel && !strcmp("N94AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N94AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 4S");
-    if (hwmodel && !strcmp("N41AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N41AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 5 (GSM)");
-    if (hwmodel && !strcmp("N42AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N42AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 5 (Global/CDMA)");
-    if (hwmodel && !strcmp("N48AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N48AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 5c (GSM)");
-    if (hwmodel && !strcmp("N49AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N49AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 5c (Global/CDMA)");
-    if (hwmodel && !strcmp("N51AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N51AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 5s (GSM)");
-    if (hwmodel && !strcmp("N53AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N53AP"), kCFCompareNonliteral))
         return CFSTR("iPhone 5s (Global/CDMA)");
-    if (hwmodel && !strcmp("J1AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N61AP"), kCFCompareNonliteral))
+        return CFSTR("iPhone 6 (GSM)");
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("J1AP"), kCFCompareNonliteral))
         return CFSTR("iPad 3");
-    if (hwmodel && !strcmp("J2AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("J2AP"), kCFCompareNonliteral))
         return CFSTR("iPad 3 (GSM)");
-    if (hwmodel && !strcmp("J2AAP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("J2AAP"), kCFCompareNonliteral))
         return CFSTR("iPad 3 (CDMA)");
-    if (hwmodel && !strcmp("P101AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("P101AP"), kCFCompareNonliteral))
         return CFSTR("iPad 4");
-    if (hwmodel && !strcmp("P102AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("P102AP"), kCFCompareNonliteral))
         return CFSTR("iPad 4 (GSM)");
-    if (hwmodel && !strcmp("P103AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("P103AP"), kCFCompareNonliteral))
         return CFSTR("iPad 4 (CDMA)");
-    if (hwmodel && !strcmp("N78AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("N78AP"), kCFCompareNonliteral))
         return CFSTR("iPod touch 5G");
-    if (hwmodel && !strcmp("J33AP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("A1509"), kCFCompareNonliteral))
+        return CFSTR("iPod touch 5G");
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("J33AP"), kCFCompareNonliteral))
         return CFSTR("Apple TV 3G");
-    if (hwmodel && !strcmp("J33IAP", hwmodel))
+    if (kCFCompareEqualTo  == CFStringCompare(model,CFSTR("J33IAP"), kCFCompareNonliteral))
         return CFSTR("Apple TV 3.1G");
 
-    return CFSTR("Unknown Device");
+    return model;
+    //return CFStringCreateWithFormat(NULL, NULL, CFSTR("%s"), hwmodel);
+    //return CFSTR("Unknown Device");
+}
+
+char * MYCFStringCopyUTF8String(CFStringRef aString) {
+  if (aString == NULL) {
+    return NULL;
+  }
+
+  CFIndex length = CFStringGetLength(aString);
+  CFIndex maxSize =
+  CFStringGetMaximumSizeForEncoding(length,
+                                    kCFStringEncodingUTF8);
+  char *buffer = (char *)malloc(maxSize);
+  if (CFStringGetCString(aString, buffer, maxSize,
+                         kCFStringEncodingUTF8)) {
+    return buffer;
+  }
+  return NULL;
 }
 
 CFStringRef get_device_full_name(const AMDeviceRef device) {
@@ -363,10 +408,30 @@ CFStringRef get_device_full_name(const AMDeviceRef device) {
     device_name = AMDeviceCopyValue(device, 0, CFSTR("DeviceName")),
     model_name = get_device_hardware_name(device);
 
+    if (verbose)
+    {
+      char *devName = MYCFStringCopyUTF8String(device_name);
+      printf("Device Name:[%s]\n",devName);
+      CFShow(device_name);
+      printf("\n");
+      free(devName);
+      
+      char *mdlName = MYCFStringCopyUTF8String(model_name);
+      printf("Model Name:[%s]\n",mdlName);
+        printf("MM: [%s]\n",CFStringGetCStringPtr(model_name, kCFStringEncodingUTF8));
+      CFShow(model_name);
+      printf("\n");
+      free(mdlName);
+    }
+
     if(device_name != NULL && model_name != NULL)
+    {
         full_name = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@ '%@' (%@)"), model_name, device_name, device_udid);
+    }
     else
-        full_name = CFStringCreateWithFormat(NULL, NULL, CFSTR("(%@)"), device_udid);
+    {
+        full_name = CFStringCreateWithFormat(NULL, NULL, CFSTR("(%@ss)"), device_udid);
+    }
 
     AMDeviceDisconnect(device);
 
@@ -440,22 +505,38 @@ CFStringRef copy_device_support_path(AMDeviceRef device) {
     return path;
 }
 
-CFStringRef copy_developer_disk_image_path(CFStringRef deviceSupportPath) {
-    CFStringRef path = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@/%@"), deviceSupportPath, CFSTR("DeveloperDiskImage.dmg"));
-    if (!path_exists(path)) {
-        CFRelease(path);
-        path = NULL;
-    }
+CFStringRef copy_developer_disk_image_path(AMDeviceRef device) {
+    CFStringRef version = NULL;
+    CFStringRef build = AMDeviceCopyValue(device, 0, CFSTR("BuildVersion"));
+    CFStringRef path = NULL;
+    CFMutableArrayRef version_parts = get_device_product_version_parts(device);
 
+    while (CFArrayGetCount(version_parts) > 0) {
+        version = CFStringCreateByCombiningStrings(NULL, version_parts, CFSTR("."));
     if (path == NULL) {
-        // Sometimes Latest seems to be missing in Xcode, in that case use find and hope for the best
-        path = copy_long_shot_disk_image_path();
-        if (CFStringGetLength(path) < 5) {
-            CFRelease(path);
-            path = NULL;
+            path = copy_xcode_path_for(CFSTR("iOS DeviceSupport"), CFStringCreateWithFormat(NULL, NULL, CFSTR("%@ (%@)/DeveloperDiskImage.dmg"), version, build));
         }
+        if (path == NULL) {
+            path = copy_xcode_path_for(CFSTR("Platforms/iPhoneOS.platform/DeviceSupport"), CFStringCreateWithFormat(NULL, NULL, CFSTR("%@ (%@)/DeveloperDiskImage.dmg"), version, build));
+    }
+        if (path == NULL) {
+             path = copy_xcode_path_for(CFSTR("Platforms/iPhoneOS.platform/DeviceSupport"), CFStringCreateWithFormat(NULL, NULL, CFSTR("*/%@ (*)/DeveloperDiskImage.dmg"), version));
+        }
+        if (path == NULL) {
+            path = copy_xcode_path_for(CFSTR("Platforms/iPhoneOS.platform/DeviceSupport"), CFStringCreateWithFormat(NULL, NULL, CFSTR("%@/DeveloperDiskImage.dmg"), version));
+        }
+        if (path == NULL) {
+            path = copy_xcode_path_for(CFSTR("Platforms/iPhoneOS.platform/DeviceSupport/Latest"), CFSTR("DeveloperDiskImage.dmg"));
+        }
+        CFRelease(version);
+        if (path != NULL) {
+            break;
+        }
+        CFArrayRemoveValueAtIndex(version_parts, CFArrayGetCount(version_parts) - 1);
     }
 
+    CFRelease(version_parts);
+    CFRelease(build);
     if (path == NULL)
     {
         printf("[ !! ] Unable to locate DeveloperDiskImage.dmg.\n[ !! ] This probably means you don't have Xcode installed, you will need to launch the app manually and logging output will not be shown!\n");
@@ -479,7 +560,7 @@ void mount_callback(CFDictionaryRef dict, int arg) {
 
 void mount_developer_image(AMDeviceRef device) {
     CFStringRef ds_path = copy_device_support_path(device);
-    CFStringRef image_path = copy_developer_disk_image_path(ds_path);
+    CFStringRef image_path = copy_developer_disk_image_path(device);
     CFStringRef sig_path = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@.signature"), image_path);
 
     if (verbose) {
@@ -627,12 +708,17 @@ void write_lldb_prep_cmds(AMDeviceRef device, CFURLRef disk_app_url) {
     if (args) {
         CFStringRef cf_args = CFStringCreateWithCString(NULL, args, kCFStringEncodingASCII);
         CFStringFindAndReplace(cmds, CFSTR("{args}"), cf_args, range, 0);
+        rangeLLDB.length = CFStringGetLength(pmodule);
         CFStringFindAndReplace(pmodule, CFSTR("{args}"), cf_args, rangeLLDB, 0);
 
+        //printf("write_lldb_prep_cmds:args: [%s][%s]\n", CFStringGetCStringPtr (cmds,kCFStringEncodingMacRoman), 
+        //    CFStringGetCStringPtr(pmodule, kCFStringEncodingMacRoman));
         CFRelease(cf_args);
     } else {
         CFStringFindAndReplace(cmds, CFSTR("{args}"), CFSTR(""), range, 0);
         CFStringFindAndReplace(pmodule, CFSTR("{args}"), CFSTR(""), rangeLLDB, 0);
+        //printf("write_lldb_prep_cmds: [%s][%s]\n", CFStringGetCStringPtr (cmds,kCFStringEncodingMacRoman), 
+        //    CFStringGetCStringPtr(pmodule, kCFStringEncodingMacRoman));
     }
     range.length = CFStringGetLength(cmds);
 
@@ -727,17 +813,29 @@ CFSocketRef lldb_socket;
 CFWriteStreamRef serverWriteStream = NULL;
 CFWriteStreamRef lldbWriteStream = NULL;
 
+int kill_ptree(pid_t root, int signum);
 void
 server_callback (CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef address, const void *data, void *info)
 {
     int res;
 
-    //PRINT ("server: %s\n", CFDataGetBytePtr (data));
-
     if (CFDataGetLength (data) == 0) {
         // FIXME: Close the socket
         //shutdown (CFSocketGetNative (lldb_socket), SHUT_RDWR);
         //close (CFSocketGetNative (lldb_socket));
+        CFSocketInvalidate(lldb_socket);
+        CFSocketInvalidate(server_socket);
+        int mypid = getpid();
+        assert((child != 0) && (child != mypid)); //child should not be here
+        if ((parent != 0) && (parent == mypid) && (child != 0))
+        {
+            if (verbose)
+            {
+                printf("Got an empty packet hence killing child (%d) tree\n", child);
+            }
+            kill_ptree(child, SIGHUP);
+        }
+        exit(exitcode_error);
         return;
     }
     res = write (CFSocketGetNative (lldb_socket), CFDataGetBytePtr (data), CFDataGetLength (data));
@@ -745,7 +843,7 @@ server_callback (CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef add
 
 void lldb_callback(CFSocketRef s, CFSocketCallBackType callbackType, CFDataRef address, const void *data, void *info)
 {
-    //PRINT ("lldb: %s\n", CFDataGetBytePtr (data));
+    //printf ("lldb: %s\n", CFDataGetBytePtr (data));
 
     if (CFDataGetLength (data) == 0)
         return;
@@ -873,42 +971,46 @@ void setup_dummy_pipe_on_stdin(int pfd[2]) {
         perror("dup2 failed");
 }
 
-void launch_debugger(AMDeviceRef device, CFURLRef url) {
+void setup_lldb(AMDeviceRef device, CFURLRef url) {
     CFStringRef device_full_name = get_device_full_name(device),
-                device_interface_name = get_device_interface_name(device);
-
+    device_interface_name = get_device_interface_name(device);
+    
     AMDeviceConnect(device);
     assert(AMDeviceIsPaired(device));
     assert(AMDeviceValidatePairing(device) == 0);
     assert(AMDeviceStartSession(device) == 0);
-
+    
     printf("------ Debug phase ------\n");
-
+    
     if(AMDeviceGetInterfaceType(device) == 2)
     {
         printf("Cannot debug %s over %s.\n", CFStringGetCStringPtr(device_full_name, CFStringGetSystemEncoding()), CFStringGetCStringPtr(device_interface_name, CFStringGetSystemEncoding()));
         exit(0);
     }
-
+    
     printf("Starting debug of %s connected through %s...\n", CFStringGetCStringPtr(device_full_name, CFStringGetSystemEncoding()), CFStringGetCStringPtr(device_interface_name, CFStringGetSystemEncoding()));
-
+    
     mount_developer_image(device);      // put debugserver on the device
     start_remote_debug_server(device);  // start debugserver
     write_lldb_prep_cmds(device, url);   // dump the necessary lldb commands into a file
-
+    
     CFRelease(url);
-
+    
     printf("[100%%] Connecting to remote debug server\n");
     printf("-------------------------\n");
-
+    
     setpgid(getpid(), 0);
     signal(SIGHUP, killed);
     signal(SIGINT, killed);
     signal(SIGTERM, killed);
     // Need this before fork to avoid race conditions. For child process we remove this right after fork.
     signal(SIGLLDB, lldb_finished_handler);
-
+    
     parent = getpid();
+}
+
+void launch_debugger(AMDeviceRef device, CFURLRef url) {
+    setup_lldb(device, url);
     int pid = fork();
     if (pid == 0) {
         signal(SIGHUP, SIG_DFL);
@@ -917,7 +1019,7 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
         bring_process_to_foreground();
 
         char lldb_shell[400];
-        sprintf(lldb_shell, LLDB_SHELL);
+        sprintf(lldb_shell, "%s/usr/bin/%s", xcode_path, LLDB_SHELL);
         if(device_id != NULL)
             strcat(lldb_shell, device_id);
 
@@ -931,6 +1033,45 @@ void launch_debugger(AMDeviceRef device, CFURLRef url) {
         _exit(WEXITSTATUS(status));
     } else if (pid > 0) {
         child = pid;
+    } else {
+        perror("fork failed");
+        exit(exitcode_error);
+    }
+}
+
+void launch_debugger_and_exit(AMDeviceRef device, CFURLRef url) {
+    setup_lldb(device,url);
+    int pfd[2] = {-1, -1};
+    if (pipe(pfd) == -1)
+        perror("Pipe failed");
+    int pid = fork();
+    if (pid == 0) {
+        signal(SIGHUP, SIG_DFL);
+        signal(SIGLLDB, SIG_DFL);
+        child = getpid();
+        
+        if (dup2(pfd[0],STDIN_FILENO) == -1)
+            perror("dup2 failed");
+        
+        char lldb_shell[400];
+        sprintf(lldb_shell, LLDB_SHELL);
+        if(device_id != NULL)
+            strcat(lldb_shell, device_id);
+        
+        int status = system(lldb_shell); // launch lldb
+        if (status == -1)
+            perror("failed launching lldb");
+        
+        close(pfd[0]);
+        
+        // Notify parent we're exiting
+        kill(parent, SIGLLDB);
+        // Pass lldb exit code
+        _exit(WEXITSTATUS(status));
+    } else if (pid > 0) {
+        child = pid;
+        if (verbose)
+            printf("Waiting for child [Child: %d][Parent: %d]\n", child, parent);
     } else {
         perror("fork failed");
         exit(exitcode_error);
@@ -973,6 +1114,7 @@ CFStringRef get_bundle_id(CFURLRef app_url)
     return bundle_id;
 }
 
+              
 void read_dir(service_conn_t afcFd, afc_connection* afc_conn_p, const char* dir,
               void(*callback)(afc_connection *conn,const char *dir,int file))
 {
@@ -990,7 +1132,12 @@ void read_dir(service_conn_t afcFd, afc_connection* afc_conn_p, const char* dir,
     char *key, *val;
     int not_dir = 0;
 
-    AFCFileInfoOpen(afc_conn_p, dir, &afc_dict_p);
+    unsigned int code = AFCFileInfoOpen(afc_conn_p, dir, &afc_dict_p);
+    if (code != 0) {
+        // there was a problem reading or opening the file to get info on it, abort
+        return;
+    }
+    
     while((AFCKeyValueRead(afc_dict_p,&key,&val) == 0) && key && val) {
         if (strcmp(key,"st_ifmt")==0) {
             not_dir = strcmp(val,"S_IFDIR");
@@ -1261,27 +1408,31 @@ void upload_file(AMDeviceRef device) {
 }
 
 void handle_device(AMDeviceRef device) {
-    if (found_device) 
-        return; // handle one device only
+    //if (found_device) 
+    //    return; // handle one device only
 
     CFStringRef found_device_id = AMDeviceCopyDeviceIdentifier(device),
                 device_full_name = get_device_full_name(device),
                 device_interface_name = get_device_interface_name(device);
 
+    if (detect_only) {
+        printf("[....] Found %s connected through %s.\n", CFStringGetCStringPtr(device_full_name, CFStringGetSystemEncoding()), CFStringGetCStringPtr(device_interface_name, CFStringGetSystemEncoding()));
+        found_device = true;
+        return;
+    }
     if (device_id != NULL) {
         if(strcmp(device_id, CFStringGetCStringPtr(found_device_id, CFStringGetSystemEncoding())) == 0) {
             found_device = true;
         } else {
+            printf("Skipping %s.\n", CFStringGetCStringPtr(device_full_name, CFStringGetSystemEncoding()));
             return;
         }
     } else {
+        device_id = MYCFStringCopyUTF8String(found_device_id);
         found_device = true;
     }
 
-    if (detect_only) {
-        printf("[....] Found %s connected through %s.\n", CFStringGetCStringPtr(device_full_name, CFStringGetSystemEncoding()), CFStringGetCStringPtr(device_interface_name, CFStringGetSystemEncoding()));
-        exit(0);
-    }
+    printf("[....] Using %s (%s).\n", CFStringGetCStringPtr(device_full_name, CFStringGetSystemEncoding()), CFStringGetCStringPtr(found_device_id, CFStringGetSystemEncoding()));
     
     if (command_only) {
         if (strcmp("list", command) == 0) {
@@ -1314,13 +1465,15 @@ void handle_device(AMDeviceRef device) {
             assert(AMDeviceIsPaired(device));
             assert(AMDeviceValidatePairing(device) == 0);
             assert(AMDeviceStartSession(device) == 0);
-
-            assert(AMDeviceSecureUninstallApplication(0, device, bundle_id, 0, NULL, 0) == 0);
-
+            
+            int code = AMDeviceSecureUninstallApplication(0, device, bundle_id, 0, NULL, 0);
+            if (code == 0) {
+                printf("[ OK ] Uninstalled package with bundle id %s\n", CFStringGetCStringPtr(bundle_id, CFStringGetSystemEncoding()));
+            } else {
+                printf("[ ERROR ] Could not uninstall package with bundle id %s\n", CFStringGetCStringPtr(bundle_id, CFStringGetSystemEncoding()));
+            }
             assert(AMDeviceStopSession(device) == 0);
             assert(AMDeviceDisconnect(device) == 0);
-
-            printf("[ OK ] Uninstalled package with bundle id %s\n", CFStringGetCStringPtr(bundle_id, CFStringGetSystemEncoding()));
         }
     }
 
@@ -1388,7 +1541,10 @@ void handle_device(AMDeviceRef device) {
     if (!debug) 
         exit(0); // no debug phase
     
-    launch_debugger(device, url);
+    if (justlaunch)
+        launch_debugger_and_exit(device, url);
+    else
+        launch_debugger(device, url);
 }
 
 void device_callback(struct am_device_notification_callback_info *info, void *arg) {
@@ -1406,7 +1562,7 @@ void device_callback(struct am_device_notification_callback_info *info, void *ar
 }
 
 void timeout_callback(CFRunLoopTimerRef timer, void *info) {
-    if (!found_device) {
+    if ((!found_device) && (!detect_only))  {
         if(best_device_match != NULL) {
             handle_device(best_device_match);
 
@@ -1419,21 +1575,41 @@ void timeout_callback(CFRunLoopTimerRef timer, void *info) {
             exit(exitcode_error);
         }
     }
+    else
+    {
+      if (!debug) {
+          printf("[....] No more devices found.\n");
+      }
+      
+      if (detect_only && !found_device) {
+          exit(exitcode_error);
+          return;
+      } else {
+          int mypid = getpid();
+          if ((parent != 0) && (parent == mypid) && (child != 0))
+          {
+              if (verbose)
+              {
+                  printf("Timeout. Killing child (%d) tree\n", child);
+              }
+              kill_ptree(child, SIGHUP);
+          }
+      }
+      exit(0);
+    }
 }
 
 void usage(const char* app) {
     printf(
         "Usage: %s [OPTION]...\n"
         "  -e, --xcodepath              Xcode path (default:/Applications/Xcode.app/Contents/Developer/)\n"
-        "  -d, --debug                  launch the app in GDB after installation\n"
+        "  -d, --debug                  launch the app in lldb after installation\n"
         "  -i, --id <device_id>         the id of the device to connect to\n"
         "  -c, --detect                 only detect if the device is connected\n"
         "  -b, --bundle <bundle.app>    the path to the app bundle to be installed\n"
         "  -a, --args <args>            command line arguments to pass to the app when launching it\n"
         "  -t, --timeout <timeout>      number of seconds to wait for a device to be connected\n"
         "  -u, --unbuffered             don't buffer stdout\n"
-        "  -g, --gdbargs <args>         extra arguments to pass to GDB when starting the debugger\n"
-        "  -x, --gdbexec <file>         GDB commands script file\n"
         "  -n, --nostart                do not start the app when debugging\n"
         "  -I, --noninteractive         start in non interactive mode (quit when app crashes or exits)\n"
         "  -L, --justlaunch             just launch the app and exit lldb\n"
@@ -1463,7 +1639,6 @@ int main(int argc, char *argv[]) {
         { "args", required_argument, NULL, 'a' },
         { "verbose", no_argument, NULL, 'v' },
         { "timeout", required_argument, NULL, 't' },
-        { "gdbexec", no_argument, NULL, 'x' },
         { "unbuffered", no_argument, NULL, 'u' },
         { "nostart", no_argument, NULL, 'n' },
         { "noninteractive", no_argument, NULL, 'I' },
@@ -1482,7 +1657,7 @@ int main(int argc, char *argv[]) {
     };
     char ch;
 
-    while ((ch = getopt_long(argc, argv, "VmcdvunrILib:a:e:t:g:x:p:1:2:o:l::w::", longopts, NULL)) != -1)
+    while ((ch = getopt_long(argc, argv, "VmcdvunrILi:b:a:e:t:g:x:p:1:2:o:l::w::", longopts, NULL)) != -1)
     {
         switch (ch) {
         case 'm':
@@ -1525,6 +1700,7 @@ int main(int argc, char *argv[]) {
             break;
         case 'c':
             detect_only = true;
+            debug = 1;
             break;
         case 'V':
             show_version();
